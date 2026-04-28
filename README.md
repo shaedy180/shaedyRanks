@@ -18,6 +18,8 @@ A CounterStrikeSharp MMR/ranking plugin with 18 rank tiers, prestige levels, and
 - Global leaderboard and personal rank stats
 - Async save with JSON file storage
 - Full history log of all point changes
+- `css_ranks_addpoints` command for external point injection (used by shaedyBounty)
+- Uses shaedyHudManager for non-conflicting center-screen overlays
 
 ## Commands
 
@@ -26,6 +28,10 @@ A CounterStrikeSharp MMR/ranking plugin with 18 rank tiers, prestige levels, and
 | `!rank` | Show your current rank, K/D, wins, and global position |
 | `!top` | Show the Top 10 leaderboard |
 | `!prestige` | Prestige your rank (resets points, increases prestige level) |
+
+## Dependencies
+
+- [shaedyHudManager](https://github.com/shaedy180/shaedyHudManager) - Centralized HUD overlay manager (must be installed alongside this plugin)
 
 ## Installation
 
