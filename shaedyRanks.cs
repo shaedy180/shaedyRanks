@@ -3,6 +3,7 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Utils;
+using ShaedyHudManager;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -69,6 +70,8 @@ public class shaedyRanksConfig
     [JsonPropertyName("prestige_enabled")] public bool PrestigeEnabled { get; set; } = true;
     [JsonPropertyName("prestige_threshold")] public int PrestigeThreshold { get; set; } = 50000;
     [JsonPropertyName("prestige_reset_points")] public int PrestigeResetPoints { get; set; } = 7000;
+
+    [JsonPropertyName("enable_hud_features")] public bool EnableHudFeatures { get; set; } = true;
 }
 
 public class KillDetail { public string VictimName { get; set; } = ""; public int Damage { get; set; } public int Hits { get; set; } public bool IsHeadshot { get; set; } }
@@ -84,7 +87,7 @@ public class DamageTracker
 public class shaedyRanksPlugin : BasePlugin
 {
     public override string ModuleName => "shaedy Ranks";
-    public override string ModuleVersion => "5.0";
+    public override string ModuleVersion => "5.2";
     public override string ModuleAuthor => "shaedy";
 
     public shaedyRanksConfig Config { get; set; } = new();
@@ -101,9 +104,9 @@ public class shaedyRanksPlugin : BasePlugin
     private Dictionary<ulong, List<KillDetail>> _roundKillsCache = new();
     private Dictionary<ulong, Dictionary<ulong, DamageTracker>> _damageLog = new();
     private Dictionary<ulong, Dictionary<ulong, DamageTracker>> _damageReceived = new();
+    private Dictionary<ulong, int> _killStreaks = new();
 
-    // Hardcoded prefix
-    private string _prefix = $" {ChatColors.White}[{ChatColors.Green}shaedy-Ranks{ChatColors.White}]";
+    private string _prefix = string.Concat(" ", ChatColors.White, "[", ChatColors.Green, "shaedy-Ranks", ChatColors.White, "]");
 
     public override void Load(bool hotReload)
     {
@@ -113,6 +116,8 @@ public class shaedyRanksPlugin : BasePlugin
 
         LoadData();
         LoadConfig();
+
+        AddCommand("css_ranks_addpoints", "Add points to a player (for bounty system)", OnCommandAddPoints);
 
         Console.WriteLine("[shaedyRanks] Plugin loaded.");
     }
@@ -157,6 +162,98 @@ public class shaedyRanksPlugin : BasePlugin
         return ChatColors.White;
     }
 
+    private string GetRankColorHex(string rankName)
+    {
+        if (rankName.Contains("Silver")) return "#7ec8e3";
+        if (rankName.Contains("Gold")) return "#ffd700";
+        if (rankName.Contains("MG") || rankName.Contains("DMG") || rankName.Contains("Eagle")) return "#4a6fa5";
+        if (rankName.Contains("LEM") || rankName.Contains("Supreme") || rankName.Contains("Global")) return "#ff4444";
+        return "#ffffff";
+    }
+
+    private void ShowMmrFloat(CCSPlayerController player, int points)
+    {
+        if (!Config.EnableHudFeatures) return;
+
+        string color = points > 0 ? "#4ade80" : "#f87171";
+        string sign = points > 0 ? "+" : "";
+        string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'><div style='font-size:32px;font-weight:bold;color:" + color + ";text-shadow:0 0 10px " + color + ";'>" + sign + points + " MMR</div></div></body></html>";
+        HudManager.Show(player.SteamID, html, HudPriority.Medium, 2);
+    }
+
+    private void ShowRankProgressBar(CCSPlayerController player)
+    {
+        if (!Config.EnableHudFeatures) return;
+
+        var data = GetPlayerData(player);
+        var rankInfo = GetRankInfo(data.Points);
+        int prevThreshold = 0;
+        foreach (var rank in _rankLadder.OrderBy(r => r.Value))
+        {
+            if (rank.Key == rankInfo.rankName) break;
+            prevThreshold = rank.Value;
+        }
+
+        int range = rankInfo.nextRankPoints - prevThreshold;
+        int progress = data.Points - prevThreshold;
+        int pct = range > 0 ? Math.Max(0, Math.Min(100, (int)((float)progress / range * 100))) : 100;
+
+        string rankColor = GetRankColorHex(rankInfo.rankName);
+        string prestigeTag = data.Prestige > 0 ? "<span style='color:#ffd700;'>P" + data.Prestige + "</span> " : "";
+
+        string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'>";
+        html += "<div style='font-size:14px;color:#aaa;'>" + prestigeTag + "<span style='color:" + rankColor + ";font-weight:bold;'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
+        html += "<div style='margin-top:4px;width:250px;height:8px;background:#333;border-radius:4px;margin-left:auto;margin-right:auto;'><div style='width:" + pct + "%;height:8px;background:" + rankColor + ";border-radius:4px;'></div></div>";
+        html += "<div style='font-size:12px;color:#888;margin-top:2px;'>" + pct + "% to next rank</div>";
+        html += "</div></body></html>";
+        HudManager.Show(player.SteamID, html, HudPriority.Medium, 3);
+    }
+
+    private void ShowKillStreakIndicator(CCSPlayerController player, int streak)
+    {
+        if (!Config.EnableHudFeatures || streak < 2) return;
+
+        string color;
+        string label;
+        if (streak >= 5) { color = "#ff4444"; label = "UNSTOPPABLE"; }
+        else if (streak >= 4) { color = "#ff8800"; label = "DOMINATING"; }
+        else if (streak >= 3) { color = "#ffcc00"; label = "KILLING SPREE"; }
+        else { color = "#4ade80"; label = "DOUBLE KILL"; }
+
+        string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'><div style='font-size:24px;font-weight:bold;color:" + color + ";text-shadow:0 0 15px " + color + ";'>" + streak + "x " + label + "</div></div></body></html>";
+        HudManager.Show(player.SteamID, html, HudPriority.Medium, 2);
+    }
+
+    public void OnCommandAddPoints(CCSPlayerController? player, CommandInfo info)
+    {
+        if (info.ArgCount < 3)
+        {
+            Console.WriteLine("[shaedyRanks] Usage: css_ranks_addpoints <steamid> <points>");
+            return;
+        }
+
+        if (!ulong.TryParse(info.GetArg(1), out ulong steamId))
+        {
+            Console.WriteLine("[shaedyRanks] Invalid SteamID: " + info.GetArg(1));
+            return;
+        }
+
+        if (!int.TryParse(info.GetArg(2), out int points))
+        {
+            Console.WriteLine("[shaedyRanks] Invalid points: " + info.GetArg(2));
+            return;
+        }
+
+        var target = Utilities.GetPlayers().FirstOrDefault(p => p.SteamID == steamId && p.IsValid && !p.IsBot);
+        if (target == null)
+        {
+            Console.WriteLine("[shaedyRanks] Player with SteamID " + steamId + " not found.");
+            return;
+        }
+
+        ModifyPoints(target, points, "Bounty Bonus");
+    }
+
     private void ModifyPoints(CCSPlayerController player, int points, string reason)
     {
         if (player.IsBot) return;
@@ -182,6 +279,8 @@ public class shaedyRanksPlugin : BasePlugin
         if (!_roundPointCache.ContainsKey(player.SteamID)) _roundPointCache[player.SteamID] = 0;
         _roundPointCache[player.SteamID] += points;
 
+        ShowMmrFloat(player, points);
+
         string newRank = GetRankInfo(data.Points).rankName;
 
         if (oldRank != newRank)
@@ -190,13 +289,13 @@ public class shaedyRanksPlugin : BasePlugin
             char color = upRank ? ChatColors.Green : ChatColors.Red;
             string action = upRank ? "PROMOTED" : "DEMOTED";
 
-            Server.PrintToChatAll($" {ChatColors.DarkRed}--------------------------------------------------");
-            Server.PrintToChatAll($"{_prefix} {ChatColors.White}Player {ChatColors.Green}{player.PlayerName} {ChatColors.White}was {color}{action}!");
-            string promoDemoRank = data.Prestige > 0 ? $"P{data.Prestige} - {newRank}" : newRank;
-            Server.PrintToChatAll($" {ChatColors.White}New Rank: {GetRankColor(newRank)}{promoDemoRank}");
-            Server.PrintToChatAll($" {ChatColors.DarkRed}--------------------------------------------------");
+            Server.PrintToChatAll(" " + ChatColors.DarkRed + "--------------------------------------------------");
+            Server.PrintToChatAll(_prefix + " " + ChatColors.White + "Player " + ChatColors.Green + player.PlayerName + " " + ChatColors.White + "was " + color + action + "!");
+            string promoDemoRank = data.Prestige > 0 ? "P" + data.Prestige + " - " + newRank : newRank;
+            Server.PrintToChatAll(" " + ChatColors.White + "New Rank: " + GetRankColor(newRank) + promoDemoRank);
+            Server.PrintToChatAll(" " + ChatColors.DarkRed + "--------------------------------------------------");
 
-            Server.ExecuteCommand($"css_svlog \"[RANK] {player.PlayerName} moved from {oldRank} to {newRank}\"");
+            Server.ExecuteCommand("css_svlog \"[RANK] " + player.PlayerName + " moved from " + oldRank + " to " + newRank + "\"");
             UpdateClanTag(player, newRank);
         }
     }
@@ -230,11 +329,10 @@ public class shaedyRanksPlugin : BasePlugin
                 if (history.Count > 2000) history = history.GetRange(0, 2000);
 
                 File.WriteAllText(_historyFilePath, JsonSerializer.Serialize(history, new JsonSerializerOptions { WriteIndented = true }));
-
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[shaedyRanks] History Write Error: {ex.Message}");
+                Console.WriteLine("[shaedyRanks] History Write Error: " + ex.Message);
             }
         }
     }
@@ -245,15 +343,18 @@ public class shaedyRanksPlugin : BasePlugin
         var data = GetPlayerData(player);
         if (string.IsNullOrEmpty(rankName)) { rankName = GetRankInfo(data.Points).rankName; }
         if (data.Prestige > 0)
-            player.Clan = $"[P{data.Prestige} {rankName}]";
+            player.Clan = "[P" + data.Prestige + " " + rankName + "]";
         else
-            player.Clan = $"[{rankName}]";
+            player.Clan = "[" + rankName + "]";
     }
 
     [GameEventHandler]
     public HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
-        if (@event.Userid != null && !@event.Userid.IsBot) UpdateClanTag(@event.Userid);
+        if (@event.Userid != null && !@event.Userid.IsBot)
+        {
+            UpdateClanTag(@event.Userid);
+        }
         return HookResult.Continue;
     }
 
@@ -264,6 +365,7 @@ public class shaedyRanksPlugin : BasePlugin
         _roundKillsCache.Clear();
         _damageLog.Clear();
         _damageReceived.Clear();
+        _killStreaks.Clear();
         return HookResult.Continue;
     }
 
@@ -346,6 +448,10 @@ public class shaedyRanksPlugin : BasePlugin
 
             if (!_roundKillsCache.ContainsKey(attacker.SteamID)) _roundKillsCache[attacker.SteamID] = new List<KillDetail>();
             _roundKillsCache[attacker.SteamID].Add(new KillDetail { VictimName = victim.PlayerName, IsHeadshot = isHS });
+
+            if (!_killStreaks.ContainsKey(attacker.SteamID)) _killStreaks[attacker.SteamID] = 0;
+            _killStreaks[attacker.SteamID]++;
+            ShowKillStreakIndicator(attacker, _killStreaks[attacker.SteamID]);
         }
         else if (attacker.TeamNum == victim.TeamNum && attacker != victim)
         {
@@ -356,6 +462,7 @@ public class shaedyRanksPlugin : BasePlugin
         {
             GetPlayerData(victim).Deaths++;
             ModifyPoints(victim, Config.PointsLossOnDeath, "Death");
+            if (_killStreaks.ContainsKey(victim.SteamID)) _killStreaks[victim.SteamID] = 0;
         }
         return HookResult.Continue;
     }
@@ -363,8 +470,13 @@ public class shaedyRanksPlugin : BasePlugin
     [GameEventHandler]
     public HookResult OnPlayerBlind(EventPlayerBlind @event, GameEventInfo info)
     {
-        if (@event.Attacker != null && !@event.Attacker.IsBot && Config.EnableFlashAssist && @event.Attacker.TeamNum != @event.Userid.TeamNum)
-            ModifyPoints(@event.Attacker, Config.PointsAssistFlash, "Flash Assist");
+        var attacker = @event.Attacker;
+        if (attacker != null && !attacker.IsBot && Config.EnableFlashAssist)
+        {
+            var victim = @event.Userid;
+            if (victim != null && attacker.TeamNum != victim.TeamNum)
+                ModifyPoints(attacker, Config.PointsAssistFlash, "Flash Assist");
+        }
         return HookResult.Continue;
     }
 
@@ -399,11 +511,10 @@ public class shaedyRanksPlugin : BasePlugin
 
             int statsPoints = _roundPointCache.ContainsKey(player.SteamID) ? _roundPointCache[player.SteamID] : 0;
             var rankInfo = GetRankInfo(data.Points);
-            string result = isWin ? $"{ChatColors.Green}VICTORY" : $"{ChatColors.Red}DEFEAT";
+            string result = isWin ? "VICTORY" : "DEFEAT";
 
             char statsColor = statsPoints >= 0 ? ChatColors.Green : ChatColors.Red;
 
-            // Build damage report
             List<string> dmgReport = new();
 
             HashSet<ulong> allOpponents = new();
@@ -436,28 +547,39 @@ public class shaedyRanksPlugin : BasePlugin
 
                 if (givenDmg > 0 || recvDmg > 0)
                 {
-                    string givenStr = givenDmg > 0 ? $"{ChatColors.Green}{givenDmg}{ChatColors.Grey} in {ChatColors.Green}{givenHits}" : $"{ChatColors.Grey}0 in 0";
-                    string recvStr = recvDmg > 0 ? $"{ChatColors.Red}{recvDmg}{ChatColors.Grey} in {ChatColors.Red}{recvHits}" : $"{ChatColors.Grey}0 in 0";
-                    dmgReport.Add($"{ChatColors.White}{opponentName} {ChatColors.Grey}- given: {givenStr} {ChatColors.Grey}| from: {recvStr}");
+                    string givenStr = givenDmg > 0 ? ChatColors.Green + givenDmg + ChatColors.Grey + " in " + ChatColors.Green + givenHits : ChatColors.Grey + "0 in 0";
+                    string recvStr = recvDmg > 0 ? ChatColors.Red + recvDmg + ChatColors.Grey + " in " + ChatColors.Red + recvHits : ChatColors.Grey + "0 in 0";
+                    dmgReport.Add(ChatColors.White + opponentName + " " + ChatColors.Grey + "- given: " + givenStr + " " + ChatColors.Grey + "| from: " + recvStr);
                 }
             }
 
-            player.PrintToChat($" {ChatColors.DarkRed}--------------------------------------------------");
-            player.PrintToChat($" {result} {ChatColors.White}({winPoints:+0;-#}) | Total Round: {statsColor}{statsPoints:+0;-#} MMR");
-            string roundDisplayRank = data.Prestige > 0 ? $"P{data.Prestige} - {rankInfo.rankName}" : rankInfo.rankName;
-            player.PrintToChat($" {ChatColors.Grey}> Rank: {GetRankColor(rankInfo.rankName)}{roundDisplayRank} {ChatColors.Gold}({data.Points})");
+            player.PrintToChat(" " + ChatColors.DarkRed + "--------------------------------------------------");
+            player.PrintToChat(" " + result + " " + ChatColors.White + "(" + (isWin ? "+" : "") + winPoints + ")" + " | Total Round: " + statsColor + (statsPoints >= 0 ? "+" : "") + statsPoints + " MMR");
+            string roundDisplayRank = data.Prestige > 0 ? "P" + data.Prestige + " - " + rankInfo.rankName : rankInfo.rankName;
+            player.PrintToChat(" " + ChatColors.Grey + "> Rank: " + GetRankColor(rankInfo.rankName) + roundDisplayRank + " " + ChatColors.Gold + "(" + data.Points + ")");
 
             if (dmgReport.Count > 0)
             {
-                player.PrintToChat($" {ChatColors.Grey}> Damage:");
+                player.PrintToChat(" " + ChatColors.Grey + "> Damage:");
                 foreach (var line in dmgReport)
-                    player.PrintToChat($"   {line}");
+                    player.PrintToChat("   " + line);
             }
 
             if (Config.PrestigeEnabled && data.Points >= Config.PrestigeThreshold)
-                player.PrintToChat($" {ChatColors.Gold}* {ChatColors.White}You can {ChatColors.Gold}PRESTIGE{ChatColors.White}! Type {ChatColors.Green}!prestige {ChatColors.White}in chat.");
+                player.PrintToChat(" " + ChatColors.Gold + "* " + ChatColors.White + "You can " + ChatColors.Gold + "PRESTIGE" + ChatColors.White + "! Type " + ChatColors.Green + "!prestige " + ChatColors.White + "in chat.");
 
-            player.PrintToChat($" {ChatColors.DarkRed}--------------------------------------------------");
+            player.PrintToChat(" " + ChatColors.DarkRed + "--------------------------------------------------");
+
+            if (Config.EnableHudFeatures)
+            {
+                ShowRoundEndHudPanel(player, isWin, winPoints, statsPoints, rankInfo, data);
+
+                AddTimer(3.5f, () =>
+                {
+                    if (player.IsValid && !player.IsBot)
+                        ShowRankProgressBar(player);
+                });
+            }
         }
 
         SaveData(async: true);
@@ -465,21 +587,39 @@ public class shaedyRanksPlugin : BasePlugin
         return HookResult.Continue;
     }
 
+    private void ShowRoundEndHudPanel(CCSPlayerController player, bool isWin, int winPoints, int totalRoundPoints, (string rankName, int nextRankPoints) rankInfo, PlayerData data)
+    {
+        string resultColor = isWin ? "#4ade80" : "#f87171";
+        string resultSymbol = isWin ? "+" : "X";
+        string resultLabel = isWin ? "VICTORY" : "DEFEAT";
+        string totalColor = totalRoundPoints >= 0 ? "#4ade80" : "#f87171";
+        string rankColor = GetRankColorHex(rankInfo.rankName);
+        string prestigeTag = data.Prestige > 0 ? "<span style='color:#ffd700;'>P" + data.Prestige + "</span>" : "";
+        string totalSign = totalRoundPoints >= 0 ? "+" : "";
+
+        string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'>";
+        html += "<div style='font-size:36px;font-weight:bold;color:" + resultColor + ";text-shadow:0 0 20px " + resultColor + ";'>" + resultSymbol + " " + resultLabel + "</div>";
+        html += "<div style='font-size:18px;color:#ccc;margin-top:4px;'>Round: <span style='color:" + totalColor + ";font-weight:bold;'>" + totalSign + totalRoundPoints + "</span> MMR</div>";
+        html += "<div style='font-size:14px;color:#888;margin-top:6px;'>" + prestigeTag + " <span style='color:" + rankColor + ";'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
+        html += "</div></body></html>";
+        HudManager.Show(player.SteamID, html, HudPriority.Medium, 3);
+    }
+
     [ConsoleCommand("css_top", "Shows Top 10 Leaderboard")]
     public void OnCommandTop(CCSPlayerController? player, CommandInfo info)
     {
         if (player == null) return;
         var sorted = _playerData.Values.OrderByDescending(p => p.Prestige * Config.PrestigeThreshold + p.Points).Take(10).ToList();
-        player.PrintToChat($" {ChatColors.Gold}TOP 10 LEADERBOARD");
+        player.PrintToChat(" " + ChatColors.Gold + "TOP 10 LEADERBOARD");
         int rank = 1;
         foreach (var p in sorted)
         {
             var rInfo = GetRankInfo(p.Points);
-            string displayRank = p.Prestige > 0 ? $"P{p.Prestige} - {rInfo.rankName}" : rInfo.rankName;
-            string prefix = (rank == 1) ? $"{ChatColors.Gold}#1" : $"{ChatColors.White}#{rank}";
-            string kd = (p.Deaths > 0) ? $"{(float)p.Kills / p.Deaths:0.0}" : $"{p.Kills}";
-            string prestigeTag = p.Prestige > 0 ? $"{ChatColors.Gold}* " : "";
-            player.PrintToChat($" {prefix} {prestigeTag}{ChatColors.Green}{p.Name} {ChatColors.Grey}- {GetRankColor(rInfo.rankName)}{displayRank} {ChatColors.White}({p.Points}) | K/D: {kd}");
+            string displayRank = p.Prestige > 0 ? "P" + p.Prestige + " - " + rInfo.rankName : rInfo.rankName;
+            string prefix = (rank == 1) ? ChatColors.Gold + "#1" : ChatColors.White + "#" + rank;
+            string kd = (p.Deaths > 0) ? ((float)p.Kills / p.Deaths).ToString("0.0") : p.Kills.ToString();
+            string prestigeTag = p.Prestige > 0 ? ChatColors.Gold + "* " : "";
+            player.PrintToChat(" " + prefix + " " + prestigeTag + ChatColors.Green + p.Name + " " + ChatColors.Grey + "- " + GetRankColor(rInfo.rankName) + displayRank + " " + ChatColors.White + "(" + p.Points + ") | K/D: " + kd);
             rank++;
         }
     }
@@ -494,19 +634,24 @@ public class shaedyRanksPlugin : BasePlugin
         var sorted = _playerData.OrderByDescending(p => p.Value.Prestige * Config.PrestigeThreshold + p.Value.Points).Select(p => p.Key).ToList();
         int pos = sorted.IndexOf(player.SteamID) + 1;
         float kdRatio = (data.Deaths > 0) ? (float)data.Kills / data.Deaths : data.Kills;
-        string displayRank = data.Prestige > 0 ? $"P{data.Prestige} - {rInfo.rankName}" : rInfo.rankName;
+        string displayRank = data.Prestige > 0 ? "P" + data.Prestige + " - " + rInfo.rankName : rInfo.rankName;
 
-        player.PrintToChat($"{_prefix} {ChatColors.Grey}{player.PlayerName}");
-        player.PrintToChat($" {ChatColors.Grey}> Rank:   {GetRankColor(rInfo.rankName)}{displayRank} {ChatColors.Gold}({data.Points} {ChatColors.Grey}MMR{ChatColors.Gold})");
+        player.PrintToChat(_prefix + " " + ChatColors.Grey + player.PlayerName);
+        player.PrintToChat(" " + ChatColors.Grey + "> Rank:   " + GetRankColor(rInfo.rankName) + displayRank + " " + ChatColors.Gold + "(" + data.Points + " " + ChatColors.Grey + "MMR" + ChatColors.Gold + ")");
         if (data.Prestige > 0)
-            player.PrintToChat($" {ChatColors.Grey}> Prestige: {ChatColors.Gold}* {data.Prestige}");
-        player.PrintToChat($" {ChatColors.Grey}> Global: {ChatColors.White}#{pos}");
+            player.PrintToChat(" " + ChatColors.Grey + "> Prestige: " + ChatColors.Gold + "* " + data.Prestige);
+        player.PrintToChat(" " + ChatColors.Grey + "> Global: " + ChatColors.White + "#" + pos);
         if (Config.PrestigeEnabled && data.Points >= Config.PrestigeThreshold)
-            player.PrintToChat($" {ChatColors.Grey}> Next:   {ChatColors.Gold}PRESTIGE READY! {ChatColors.White}Type {ChatColors.Green}!prestige");
+            player.PrintToChat(" " + ChatColors.Grey + "> Next:   " + ChatColors.Gold + "PRESTIGE READY! " + ChatColors.White + "Type " + ChatColors.Green + "!prestige");
         else
-            player.PrintToChat($" {ChatColors.Grey}> Next:   {ChatColors.White}{toNext} Points needed");
-        player.PrintToChat($" {ChatColors.Grey}> K/D:    {ChatColors.Green}{data.Kills}/{data.Deaths} {ChatColors.White}({kdRatio:0.00})");
-        player.PrintToChat($" {ChatColors.Grey}> Wins:   {ChatColors.Green}{data.Wins} {ChatColors.Grey}| MVP: {ChatColors.Green}{data.MVP}");
+            player.PrintToChat(" " + ChatColors.Grey + "> Next:   " + ChatColors.White + toNext + " Points needed");
+        player.PrintToChat(" " + ChatColors.Grey + "> K/D:    " + ChatColors.Green + data.Kills + "/" + data.Deaths + " " + ChatColors.White + "(" + kdRatio.ToString("0.00") + ")");
+        player.PrintToChat(" " + ChatColors.Grey + "> Wins:   " + ChatColors.Green + data.Wins + " " + ChatColors.Grey + "| MVP: " + ChatColors.Green + data.MVP);
+
+        if (Config.EnableHudFeatures)
+        {
+            ShowRankProgressBar(player);
+        }
     }
 
     [ConsoleCommand("css_prestige", "Prestige your rank")]
@@ -515,15 +660,15 @@ public class shaedyRanksPlugin : BasePlugin
         if (player == null || player.IsBot) return;
         if (!Config.PrestigeEnabled)
         {
-            player.PrintToChat($"{_prefix} {ChatColors.Red}Prestige is currently disabled.");
+            player.PrintToChat(_prefix + " " + ChatColors.Red + "Prestige is currently disabled.");
             return;
         }
         var data = GetPlayerData(player);
         if (data.Points < Config.PrestigeThreshold)
         {
             int needed = Config.PrestigeThreshold - data.Points;
-            player.PrintToChat($"{_prefix} {ChatColors.Red}You need {ChatColors.Gold}{needed} {ChatColors.Red}more MMR to prestige.");
-            player.PrintToChat($" {ChatColors.Grey}> Current: {ChatColors.White}{data.Points} / {Config.PrestigeThreshold}");
+            player.PrintToChat(_prefix + " " + ChatColors.Red + "You need " + ChatColors.Gold + needed + " " + ChatColors.Red + "more MMR to prestige.");
+            player.PrintToChat(" " + ChatColors.Grey + "> Current: " + ChatColors.White + data.Points + " / " + Config.PrestigeThreshold);
             return;
         }
 
@@ -532,23 +677,23 @@ public class shaedyRanksPlugin : BasePlugin
         data.Points = Config.PrestigeResetPoints;
 
         string newRank = GetRankInfo(data.Points).rankName;
-        string displayRank = $"P{data.Prestige} - {newRank}";
+        string displayRank = "P" + data.Prestige + " - " + newRank;
 
         int change = data.Points - oldPoints;
         string steamId = player.SteamID.ToString();
         string playerName = player.PlayerName;
         int prestigeLevel = data.Prestige;
-        Task.Run(() => LogHistoryAsync(steamId, playerName, change, data.Points, $"PRESTIGE {prestigeLevel}", prestigeLevel));
+        Task.Run(() => LogHistoryAsync(steamId, playerName, change, data.Points, "PRESTIGE " + prestigeLevel, prestigeLevel));
 
-        Server.PrintToChatAll($" {ChatColors.DarkRed}--------------------------------------------------");
-        Server.PrintToChatAll($"{_prefix} {ChatColors.Gold}* {player.PlayerName} {ChatColors.White}has reached {ChatColors.Gold}PRESTIGE {data.Prestige}{ChatColors.White}!");
-        Server.PrintToChatAll($" {ChatColors.White}New Rank: {GetRankColor(newRank)}{displayRank}");
-        Server.PrintToChatAll($" {ChatColors.DarkRed}--------------------------------------------------");
+        Server.PrintToChatAll(" " + ChatColors.DarkRed + "--------------------------------------------------");
+        Server.PrintToChatAll(_prefix + " " + ChatColors.Gold + "* " + player.PlayerName + " " + ChatColors.White + "has reached " + ChatColors.Gold + "PRESTIGE " + data.Prestige + ChatColors.White + "!");
+        Server.PrintToChatAll(" " + ChatColors.White + "New Rank: " + GetRankColor(newRank) + displayRank);
+        Server.PrintToChatAll(" " + ChatColors.DarkRed + "--------------------------------------------------");
 
         UpdateClanTag(player, newRank);
         SaveData(async: true);
 
-        Server.ExecuteCommand($"css_svlog \"[PRESTIGE] {player.PlayerName} reached Prestige {data.Prestige}\"");
+        Server.ExecuteCommand("css_svlog \"[PRESTIGE] " + player.PlayerName + " reached Prestige " + data.Prestige + "\"");
     }
 
     private PlayerData GetPlayerData(CCSPlayerController player)
@@ -593,7 +738,7 @@ public class shaedyRanksPlugin : BasePlugin
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[shaedyRanks] Save Error: {ex.Message}");
+                        Console.WriteLine("[shaedyRanks] Save Error: " + ex.Message);
                     }
                 }
             });
@@ -607,4 +752,3 @@ public class shaedyRanksPlugin : BasePlugin
         }
     }
 }
-
