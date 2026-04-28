@@ -31,7 +31,7 @@ A CounterStrikeSharp MMR/ranking plugin with 18 rank tiers, prestige levels, and
 
 ## Dependencies
 
-- [shaedyHudManager](https://github.com/shaedy180/shaedyHudManager) - Centralized HUD overlay manager (must be installed alongside this plugin)
+- [shaedyHudManager](https://github.com/shaedy180/shaedyHudManager) - Centralized HUD overlay manager (must be installed alongside this plugin, connects via runtime reflection)
 
 ## Installation
 

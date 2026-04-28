@@ -178,7 +178,7 @@ public class shaedyRanksPlugin : BasePlugin
         string color = points > 0 ? "#4ade80" : "#f87171";
         string sign = points > 0 ? "+" : "";
         string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'><div style='font-size:32px;font-weight:bold;color:" + color + ";text-shadow:0 0 10px " + color + ";'>" + sign + points + " MMR</div></div></body></html>";
-        HudManager.Show(player.SteamID, html, HudPriority.Medium, 2);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 2);
     }
 
     private void ShowRankProgressBar(CCSPlayerController player)
@@ -206,7 +206,7 @@ public class shaedyRanksPlugin : BasePlugin
         html += "<div style='margin-top:4px;width:250px;height:8px;background:#333;border-radius:4px;margin-left:auto;margin-right:auto;'><div style='width:" + pct + "%;height:8px;background:" + rankColor + ";border-radius:4px;'></div></div>";
         html += "<div style='font-size:12px;color:#888;margin-top:2px;'>" + pct + "% to next rank</div>";
         html += "</div></body></html>";
-        HudManager.Show(player.SteamID, html, HudPriority.Medium, 3);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 3);
     }
 
     private void ShowKillStreakIndicator(CCSPlayerController player, int streak)
@@ -221,7 +221,7 @@ public class shaedyRanksPlugin : BasePlugin
         else { color = "#4ade80"; label = "DOUBLE KILL"; }
 
         string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'><div style='font-size:24px;font-weight:bold;color:" + color + ";text-shadow:0 0 15px " + color + ";'>" + streak + "x " + label + "</div></div></body></html>";
-        HudManager.Show(player.SteamID, html, HudPriority.Medium, 2);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 2);
     }
 
     public void OnCommandAddPoints(CCSPlayerController? player, CommandInfo info)
@@ -602,7 +602,7 @@ public class shaedyRanksPlugin : BasePlugin
         html += "<div style='font-size:18px;color:#ccc;margin-top:4px;'>Round: <span style='color:" + totalColor + ";font-weight:bold;'>" + totalSign + totalRoundPoints + "</span> MMR</div>";
         html += "<div style='font-size:14px;color:#888;margin-top:6px;'>" + prestigeTag + " <span style='color:" + rankColor + ";'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
         html += "</div></body></html>";
-        HudManager.Show(player.SteamID, html, HudPriority.Medium, 3);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 3);
     }
 
     [ConsoleCommand("css_top", "Shows Top 10 Leaderboard")]
