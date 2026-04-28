@@ -12,7 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\shaedyHudManager\shaedyHudManager.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\shaedyHudManager\shaedyHudManager.csproj" />
   </ItemGroup>
 
 </Project>
