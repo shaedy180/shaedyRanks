@@ -2,6 +2,7 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
 using ShaedyHudManager;
 using System.Text.Json;
@@ -72,6 +73,16 @@ public class shaedyRanksConfig
     [JsonPropertyName("prestige_reset_points")] public int PrestigeResetPoints { get; set; } = 7000;
 
     [JsonPropertyName("enable_hud_features")] public bool EnableHudFeatures { get; set; } = true;
+    [JsonPropertyName("round_end_hud_initial_delay_seconds")] public float RoundEndHudInitialDelaySeconds { get; set; } = 1.25f;
+    [JsonPropertyName("round_end_hud_duration_seconds")] public int RoundEndHudDurationSeconds { get; set; } = 6;
+    [JsonPropertyName("suppress_native_bomb_planted_hud")] public bool SuppressNativeBombPlantedHud { get; set; } = false;
+    [JsonPropertyName("enable_debug_logging")] public bool EnableDebugLogging { get; set; } = false;
+
+    public void Normalize()
+    {
+        RoundEndHudInitialDelaySeconds = Math.Clamp(RoundEndHudInitialDelaySeconds, 0.0f, 5.0f);
+        RoundEndHudDurationSeconds = Math.Clamp(RoundEndHudDurationSeconds, 3, 10);
+    }
 }
 
 public class KillDetail { public string VictimName { get; set; } = ""; public int Damage { get; set; } public int Hits { get; set; } public bool IsHeadshot { get; set; } }
@@ -87,10 +98,11 @@ public class DamageTracker
 public class shaedyRanksPlugin : BasePlugin
 {
     public override string ModuleName => "shaedy Ranks";
-    public override string ModuleVersion => "5.4";
+    public override string ModuleVersion => "5.5";
     public override string ModuleAuthor => "shaedy";
 
-    private const int RoundEndHudDurationSeconds = 6;
+    private const float RoundEndNativeBusySeconds = 1.25f;
+    private const float BombPlantedNativeBusySeconds = 1.75f;
 
     public shaedyRanksConfig Config { get; set; } = new();
 
@@ -107,6 +119,8 @@ public class shaedyRanksPlugin : BasePlugin
     private Dictionary<ulong, Dictionary<ulong, DamageTracker>> _damageLog = new();
     private Dictionary<ulong, Dictionary<ulong, DamageTracker>> _damageReceived = new();
     private Dictionary<ulong, int> _killStreaks = new();
+    private readonly Dictionary<ulong, long> _pendingRoundEndHudTokens = new();
+    private long _roundEndHudTokenCounter;
 
     private string _prefix = string.Concat(" ", ChatColors.White, "[", ChatColors.Green, "shaedy-Ranks", ChatColors.White, "]");
 
@@ -120,6 +134,7 @@ public class shaedyRanksPlugin : BasePlugin
         LoadConfig();
 
         AddCommand("css_ranks_addpoints", "Add points to a player (for bounty system)", OnCommandAddPoints);
+        RegisterListener<Listeners.OnMapStart>(OnMapStart);
 
         Console.WriteLine("[shaedyRanks] Plugin loaded.");
     }
@@ -131,12 +146,16 @@ public class shaedyRanksPlugin : BasePlugin
         if (!File.Exists(_configFilePath))
         {
             Config = new shaedyRanksConfig();
+            Config.Normalize();
             File.WriteAllText(_configFilePath, JsonSerializer.Serialize(Config, new JsonSerializerOptions { WriteIndented = true }));
         }
         else
         {
             try { Config = JsonSerializer.Deserialize<shaedyRanksConfig>(File.ReadAllText(_configFilePath)) ?? new(); } catch { }
         }
+
+        Config.Normalize();
+        File.WriteAllText(_configFilePath, JsonSerializer.Serialize(Config, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private readonly Dictionary<string, int> _rankLadder = new() {
@@ -381,6 +400,7 @@ public class shaedyRanksPlugin : BasePlugin
         _damageLog.Clear();
         _damageReceived.Clear();
         _killStreaks.Clear();
+        _pendingRoundEndHudTokens.Clear();
         return HookResult.Continue;
     }
 
@@ -495,8 +515,28 @@ public class shaedyRanksPlugin : BasePlugin
         return HookResult.Continue;
     }
 
-    [GameEventHandler] public HookResult OnBombDefused(EventBombDefused @event, GameEventInfo info) { if (@event.Userid != null && !@event.Userid.IsBot) ModifyPoints(@event.Userid, Config.PointsBombDefuse, "Bomb Defused"); return HookResult.Continue; }
-    [GameEventHandler] public HookResult OnBombPlanted(EventBombPlanted @event, GameEventInfo info) { if (@event.Userid != null && !@event.Userid.IsBot) ModifyPoints(@event.Userid, Config.PointsBombPlant, "Bomb Planted"); return HookResult.Continue; }
+    [GameEventHandler]
+    public HookResult OnBombDefused(EventBombDefused @event, GameEventInfo info) { if (@event.Userid != null && !@event.Userid.IsBot) ModifyPoints(@event.Userid, Config.PointsBombDefuse, "Bomb Defused"); return HookResult.Continue; }
+
+    [GameEventHandler(HookMode.Pre)]
+    public HookResult OnBombPlanted(EventBombPlanted @event, GameEventInfo info)
+    {
+        if (Config.SuppressNativeBombPlantedHud)
+        {
+            info.DontBroadcast = true;
+            LogDebug("Suppressed native bomb planted center message.");
+        }
+        else
+        {
+            NotifyNativeCenterBusyForAllPlayers(BombPlantedNativeBusySeconds);
+        }
+
+        if (@event.Userid != null && !@event.Userid.IsBot)
+            ModifyPoints(@event.Userid, Config.PointsBombPlant, "Bomb Planted");
+
+        return HookResult.Continue;
+    }
+
     [GameEventHandler]
     public HookResult OnRoundMVP(EventRoundMvp @event, GameEventInfo info)
     {
@@ -514,9 +554,11 @@ public class shaedyRanksPlugin : BasePlugin
         if (!Config.EnableRoundLogic) return HookResult.Continue;
         int winnerTeam = @event.Winner; if (winnerTeam < 2) return HookResult.Continue;
 
+        NotifyNativeCenterBusyForAllPlayers(RoundEndNativeBusySeconds);
+
         foreach (var player in Utilities.GetPlayers())
         {
-            if (player == null || !player.IsValid || player.IsBot || player.TeamNum <= 1) continue;
+            if (!IsValidConnectedPlayer(player) || player.TeamNum <= 1) continue;
             var data = GetPlayerData(player);
             bool isWin = (player.TeamNum == winnerTeam);
             int winPoints = isWin ? Config.PointsRoundWin : Config.PointsRoundLoss;
@@ -586,7 +628,7 @@ public class shaedyRanksPlugin : BasePlugin
             player.PrintToChat(" " + ChatColors.DarkRed + "--------------------------------------------------");
 
             if (Config.EnableHudFeatures)
-                ShowRoundEndHudPanel(player, isWin, statsPoints, rankInfo, data);
+                ScheduleRoundEndHud(player.SteamID, isWin, statsPoints);
         }
 
         SaveData(async: true);
@@ -594,8 +636,10 @@ public class shaedyRanksPlugin : BasePlugin
         return HookResult.Continue;
     }
 
-    private void ShowRoundEndHudPanel(CCSPlayerController player, bool isWin, int totalRoundPoints, (string rankName, int nextRankPoints) rankInfo, PlayerData data)
+    private void ShowRoundEndHudPanel(CCSPlayerController player, bool isWin, int totalRoundPoints)
     {
+        var data = GetPlayerData(player);
+        var rankInfo = GetRankInfo(data.Points);
         string resultColor = isWin ? "#4ade80" : "#f87171";
         string resultLabel = isWin ? "VICTORY" : "DEFEAT";
         string totalColor = totalRoundPoints >= 0 ? "#4ade80" : "#f87171";
@@ -613,7 +657,7 @@ public class shaedyRanksPlugin : BasePlugin
         html += "<div style='font-size:12px;color:#999;margin-top:4px;'>" + details.progressPercent + "% to next rank</div>";
         html += "<div style='font-size:12px;color:#777;margin-top:2px;'>" + nextRankText + "</div>";
         html += "</div></body></html>";
-        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, RoundEndHudDurationSeconds);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Critical, Config.RoundEndHudDurationSeconds);
     }
 
     [ConsoleCommand("css_top", "Shows Top 10 Leaderboard")]
@@ -761,5 +805,68 @@ public class shaedyRanksPlugin : BasePlugin
                 try { File.WriteAllText(_dbFilePath, JsonSerializer.Serialize(_playerData, new JsonSerializerOptions { WriteIndented = true })); } catch { }
             }
         }
+    }
+
+    private void ScheduleRoundEndHud(ulong steamId, bool isWin, int totalRoundPoints)
+    {
+        long token = Interlocked.Increment(ref _roundEndHudTokenCounter);
+        _pendingRoundEndHudTokens[steamId] = token;
+
+        LogDebug("Scheduled delayed round-end HUD for SteamID " + steamId + " in " + Config.RoundEndHudInitialDelaySeconds.ToString("0.00") + "s.");
+
+        AddTimer(Config.RoundEndHudInitialDelaySeconds, () =>
+        {
+            if (!_pendingRoundEndHudTokens.TryGetValue(steamId, out var currentToken) || currentToken != token)
+                return;
+
+            _pendingRoundEndHudTokens.Remove(steamId);
+
+            if (!TryGetConnectedPlayer(steamId, out var player))
+            {
+                LogDebug("Skipped delayed round-end HUD because player " + steamId + " is no longer valid.");
+                return;
+            }
+
+            ShowRoundEndHudPanel(player, isWin, totalRoundPoints);
+        }, TimerFlags.STOP_ON_MAPCHANGE);
+    }
+
+    private void NotifyNativeCenterBusyForAllPlayers(float seconds)
+    {
+        foreach (var player in Utilities.GetPlayers())
+        {
+            if (!IsValidConnectedPlayer(player))
+                continue;
+
+            HudManagerProxy.NotifyNativeCenterBusy(player.SteamID, seconds);
+        }
+    }
+
+    private bool TryGetConnectedPlayer(ulong steamId, out CCSPlayerController player)
+    {
+        player = Utilities.GetPlayers().FirstOrDefault(p => p.SteamID == steamId && IsValidConnectedPlayer(p))!;
+        return player != null;
+    }
+
+    private static bool IsValidConnectedPlayer(CCSPlayerController? player)
+    {
+        return player != null
+               && player.IsValid
+               && !player.IsBot
+               && !player.IsHLTV
+               && player.Connected == PlayerConnectedState.PlayerConnected;
+    }
+
+    private void OnMapStart(string mapName)
+    {
+        _pendingRoundEndHudTokens.Clear();
+    }
+
+    private void LogDebug(string message)
+    {
+        if (!Config.EnableDebugLogging)
+            return;
+
+        Console.WriteLine("[shaedyRanks] " + message);
     }
 }

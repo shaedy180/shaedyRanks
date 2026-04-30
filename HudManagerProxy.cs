@@ -9,6 +9,7 @@ public static class HudManagerProxy
     private static Type? _hudPriorityType;
     private static MethodInfo? _showMethod;
     private static MethodInfo? _clearMethod;
+    private static MethodInfo? _notifyNativeCenterBusyMethod;
     private static bool _initialized;
     private static string? _lastError;
 
@@ -33,14 +34,15 @@ public static class HudManagerProxy
                 if (asm.GetName().Name == "shaedyHudManager")
                 {
                     _hudManagerType = asm.GetType("ShaedyHudManager.HudManager");
-                    _hudPriorityType = asm.GetType("ShaedyHudManager.HudPriority");
-                    if (_hudManagerType != null)
-                    {
-                        _showMethod = _hudManagerType.GetMethod("Show", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(ulong), typeof(string), _hudPriorityType!, typeof(int) }, null);
-                        _clearMethod = _hudManagerType.GetMethod("Clear", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(ulong) }, null);
-                        Console.WriteLine("[HudManagerProxy] Connected to HudManager successfully.");
-                        return true;
-                    }
+                        _hudPriorityType = asm.GetType("ShaedyHudManager.HudPriority");
+                        if (_hudManagerType != null)
+                        {
+                            _showMethod = _hudManagerType.GetMethod("Show", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(ulong), typeof(string), _hudPriorityType!, typeof(int) }, null);
+                            _clearMethod = _hudManagerType.GetMethod("Clear", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(ulong) }, null);
+                            _notifyNativeCenterBusyMethod = _hudManagerType.GetMethod("NotifyNativeCenterBusy", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(ulong), typeof(float) }, null);
+                            Console.WriteLine("[HudManagerProxy] Connected to HudManager successfully.");
+                            return true;
+                        }
                 }
             }
 
@@ -85,6 +87,19 @@ public static class HudManagerProxy
         catch (Exception ex)
         {
             Console.WriteLine("[HudManagerProxy] Clear failed: " + ex.InnerException?.Message);
+        }
+    }
+
+    public static void NotifyNativeCenterBusy(ulong steamId, float seconds)
+    {
+        if (!Initialize() || _notifyNativeCenterBusyMethod == null) return;
+        try
+        {
+            _notifyNativeCenterBusyMethod.Invoke(null, new object[] { steamId, seconds });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[HudManagerProxy] NotifyNativeCenterBusy failed: " + ex.InnerException?.Message);
         }
     }
 }
