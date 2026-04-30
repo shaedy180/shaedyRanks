@@ -87,11 +87,10 @@ public class DamageTracker
 public class shaedyRanksPlugin : BasePlugin
 {
     public override string ModuleName => "shaedy Ranks";
-    public override string ModuleVersion => "5.3";
+    public override string ModuleVersion => "5.4";
     public override string ModuleAuthor => "shaedy";
 
-    private const int RoundEndSummaryDurationSeconds = 3;
-    private const int RoundEndRankDurationSeconds = 6;
+    private const int RoundEndHudDurationSeconds = 6;
 
     public shaedyRanksConfig Config { get; set; } = new();
 
@@ -184,10 +183,8 @@ public class shaedyRanksPlugin : BasePlugin
         HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 2);
     }
 
-    private string BuildRankProgressBarHtml(CCSPlayerController player)
+    private (int progressPercent, string rankColor, string prestigeTag, int pointsToNextRank) GetRankHudDetails(PlayerData data, (string rankName, int nextRankPoints) rankInfo)
     {
-        var data = GetPlayerData(player);
-        var rankInfo = GetRankInfo(data.Points);
         int prevThreshold = 0;
         foreach (var rank in _rankLadder.OrderBy(r => r.Value))
         {
@@ -201,11 +198,21 @@ public class shaedyRanksPlugin : BasePlugin
 
         string rankColor = GetRankColorHex(rankInfo.rankName);
         string prestigeTag = data.Prestige > 0 ? "<span style='color:#ffd700;'>P" + data.Prestige + "</span> " : "";
+        int pointsToNextRank = rankInfo.nextRankPoints >= 99999 ? 0 : Math.Max(0, rankInfo.nextRankPoints - data.Points);
+
+        return (pct, rankColor, prestigeTag, pointsToNextRank);
+    }
+
+    private string BuildRankProgressBarHtml(CCSPlayerController player)
+    {
+        var data = GetPlayerData(player);
+        var rankInfo = GetRankInfo(data.Points);
+        var details = GetRankHudDetails(data, rankInfo);
 
         string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'>";
-        html += "<div style='font-size:14px;color:#aaa;'>" + prestigeTag + "<span style='color:" + rankColor + ";font-weight:bold;'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
-        html += "<div style='margin-top:4px;width:250px;height:8px;background:#333;border-radius:4px;margin-left:auto;margin-right:auto;'><div style='width:" + pct + "%;height:8px;background:" + rankColor + ";border-radius:4px;'></div></div>";
-        html += "<div style='font-size:12px;color:#888;margin-top:2px;'>" + pct + "% to next rank</div>";
+        html += "<div style='font-size:14px;color:#aaa;'>" + details.prestigeTag + "<span style='color:" + details.rankColor + ";font-weight:bold;'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
+        html += "<div style='margin-top:4px;width:250px;height:8px;background:#333;border-radius:4px;margin-left:auto;margin-right:auto;'><div style='width:" + details.progressPercent + "%;height:8px;background:" + details.rankColor + ";border-radius:4px;'></div></div>";
+        html += "<div style='font-size:12px;color:#888;margin-top:2px;'>" + details.progressPercent + "% to next rank</div>";
         html += "</div></body></html>";
         return html;
     }
@@ -579,7 +586,7 @@ public class shaedyRanksPlugin : BasePlugin
             player.PrintToChat(" " + ChatColors.DarkRed + "--------------------------------------------------");
 
             if (Config.EnableHudFeatures)
-                QueueRoundEndHudPanels(player, isWin, statsPoints, rankInfo, data);
+                ShowRoundEndHudPanel(player, isWin, statsPoints, rankInfo, data);
         }
 
         SaveData(async: true);
@@ -590,27 +597,23 @@ public class shaedyRanksPlugin : BasePlugin
     private void ShowRoundEndHudPanel(CCSPlayerController player, bool isWin, int totalRoundPoints, (string rankName, int nextRankPoints) rankInfo, PlayerData data)
     {
         string resultColor = isWin ? "#4ade80" : "#f87171";
-        string resultSymbol = isWin ? "+" : "X";
         string resultLabel = isWin ? "VICTORY" : "DEFEAT";
         string totalColor = totalRoundPoints >= 0 ? "#4ade80" : "#f87171";
-        string rankColor = GetRankColorHex(rankInfo.rankName);
-        string prestigeTag = data.Prestige > 0 ? "<span style='color:#ffd700;'>P" + data.Prestige + "</span>" : "";
         string totalSign = totalRoundPoints >= 0 ? "+" : "";
+        var details = GetRankHudDetails(data, rankInfo);
+        string nextRankText = rankInfo.nextRankPoints >= 99999
+            ? "Top rank reached"
+            : details.pointsToNextRank + " MMR to next rank";
 
         string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'>";
-        html += "<div style='font-size:36px;font-weight:bold;color:" + resultColor + ";text-shadow:0 0 20px " + resultColor + ";'>" + resultSymbol + " " + resultLabel + "</div>";
-        html += "<div style='font-size:18px;color:#ccc;margin-top:4px;'>Round: <span style='color:" + totalColor + ";font-weight:bold;'>" + totalSign + totalRoundPoints + "</span> MMR</div>";
-        html += "<div style='font-size:14px;color:#888;margin-top:6px;'>" + prestigeTag + " <span style='color:" + rankColor + ";'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
+        html += "<div style='font-size:32px;font-weight:bold;color:" + resultColor + ";text-shadow:0 0 18px " + resultColor + ";'>" + resultLabel + "</div>";
+        html += "<div style='font-size:24px;font-weight:bold;color:" + totalColor + ";margin-top:4px;'>" + totalSign + totalRoundPoints + " MMR</div>";
+        html += "<div style='font-size:15px;color:#cfcfcf;margin-top:8px;'>" + details.prestigeTag + "<span style='color:" + details.rankColor + ";font-weight:bold;'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
+        html += "<div style='margin-top:8px;width:260px;height:10px;background:#333;border-radius:5px;margin-left:auto;margin-right:auto;'><div style='width:" + details.progressPercent + "%;height:10px;background:" + details.rankColor + ";border-radius:5px;'></div></div>";
+        html += "<div style='font-size:12px;color:#999;margin-top:4px;'>" + details.progressPercent + "% to next rank</div>";
+        html += "<div style='font-size:12px;color:#777;margin-top:2px;'>" + nextRankText + "</div>";
         html += "</div></body></html>";
-        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.High, RoundEndSummaryDurationSeconds);
-    }
-
-    private void QueueRoundEndHudPanels(CCSPlayerController player, bool isWin, int totalRoundPoints, (string rankName, int nextRankPoints) rankInfo, PlayerData data)
-    {
-        // Queue the follow-up panel underneath the round-end summary so the player
-        // always gets a stable VICTORY/DEFEAT screen before the rank/MMR panel takes over.
-        HudManagerProxy.Show(player.SteamID, BuildRankProgressBarHtml(player), HudManagerProxy.Priority.Medium, RoundEndRankDurationSeconds);
-        ShowRoundEndHudPanel(player, isWin, totalRoundPoints, rankInfo, data);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, RoundEndHudDurationSeconds);
     }
 
     [ConsoleCommand("css_top", "Shows Top 10 Leaderboard")]
