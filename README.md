@@ -19,7 +19,7 @@ A CounterStrikeSharp MMR/ranking plugin with 18 rank tiers, prestige levels, and
 - Async save with JSON file storage
 - Full history log of all point changes
 - `css_ranks_addpoints` command for external point injection (used by shaedyBounty)
-- Uses shaedyHudManager for non-conflicting center-screen overlays, delayed round-end rank HUDs, and native-center collision recovery
+- Uses shaedyHudManager for non-conflicting center-screen overlays and delayed one-shot round-end teasers
 
 ## Commands
 
@@ -45,7 +45,7 @@ The config (`shaedyRanksConfig.json`) is auto-generated on first run. It has 30+
 - **Multipliers**: global multiplier, long-distance bonus, team-size scaling, TTK penalty
 - **Toggles**: headshot bonus, flash assists, round win/loss logic, bot kills
 - **Prestige**: enable/disable, threshold, reset points
-- **HUD timing**: delayed round-end popup timing/duration and optional suppression of the native bomb-planted center message
+- **HUD timing**: delayed short round-end teaser timing/duration and optional suppression of the native bomb-planted center message
 
 ## Data Files
 

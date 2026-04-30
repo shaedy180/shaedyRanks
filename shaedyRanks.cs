@@ -73,15 +73,15 @@ public class shaedyRanksConfig
     [JsonPropertyName("prestige_reset_points")] public int PrestigeResetPoints { get; set; } = 7000;
 
     [JsonPropertyName("enable_hud_features")] public bool EnableHudFeatures { get; set; } = true;
-    [JsonPropertyName("round_end_hud_initial_delay_seconds")] public float RoundEndHudInitialDelaySeconds { get; set; } = 1.25f;
-    [JsonPropertyName("round_end_hud_duration_seconds")] public int RoundEndHudDurationSeconds { get; set; } = 6;
-    [JsonPropertyName("suppress_native_bomb_planted_hud")] public bool SuppressNativeBombPlantedHud { get; set; } = false;
+    [JsonPropertyName("round_end_hud_initial_delay_seconds")] public float RoundEndHudInitialDelaySeconds { get; set; } = 2.25f;
+    [JsonPropertyName("round_end_hud_duration_seconds")] public int RoundEndHudDurationSeconds { get; set; } = 3;
+    [JsonPropertyName("suppress_native_bomb_planted_hud")] public bool SuppressNativeBombPlantedHud { get; set; } = true;
     [JsonPropertyName("enable_debug_logging")] public bool EnableDebugLogging { get; set; } = false;
 
     public void Normalize()
     {
         RoundEndHudInitialDelaySeconds = Math.Clamp(RoundEndHudInitialDelaySeconds, 0.0f, 5.0f);
-        RoundEndHudDurationSeconds = Math.Clamp(RoundEndHudDurationSeconds, 3, 10);
+        RoundEndHudDurationSeconds = Math.Clamp(RoundEndHudDurationSeconds, 2, 5);
     }
 }
 
@@ -98,10 +98,11 @@ public class DamageTracker
 public class shaedyRanksPlugin : BasePlugin
 {
     public override string ModuleName => "shaedy Ranks";
-    public override string ModuleVersion => "5.5";
+    public override string ModuleVersion => "5.6";
     public override string ModuleAuthor => "shaedy";
 
     private const float RoundEndNativeBusySeconds = 1.25f;
+    private const float RoundStartNativeBusySeconds = 1.00f;
     private const float BombPlantedNativeBusySeconds = 1.75f;
 
     public shaedyRanksConfig Config { get; set; } = new();
@@ -400,7 +401,7 @@ public class shaedyRanksPlugin : BasePlugin
         _damageLog.Clear();
         _damageReceived.Clear();
         _killStreaks.Clear();
-        _pendingRoundEndHudTokens.Clear();
+        NotifyNativeCenterBusyForAllPlayers(RoundStartNativeBusySeconds);
         return HookResult.Continue;
     }
 
@@ -611,6 +612,7 @@ public class shaedyRanksPlugin : BasePlugin
             }
 
             player.PrintToChat(" " + ChatColors.DarkRed + "--------------------------------------------------");
+            player.PrintToChat(" " + ChatColors.Gold + "Round Summary");
             player.PrintToChat(" " + result + " " + ChatColors.White + "(" + (isWin ? "+" : "") + winPoints + ")" + " | Total Round: " + statsColor + (statsPoints >= 0 ? "+" : "") + statsPoints + " MMR");
             string roundDisplayRank = data.Prestige > 0 ? "P" + data.Prestige + " - " + rankInfo.rankName : rankInfo.rankName;
             player.PrintToChat(" " + ChatColors.Grey + "> Rank: " + GetRankColor(rankInfo.rankName) + roundDisplayRank + " " + ChatColors.Gold + "(" + data.Points + ")");
@@ -638,26 +640,16 @@ public class shaedyRanksPlugin : BasePlugin
 
     private void ShowRoundEndHudPanel(CCSPlayerController player, bool isWin, int totalRoundPoints)
     {
-        var data = GetPlayerData(player);
-        var rankInfo = GetRankInfo(data.Points);
         string resultColor = isWin ? "#4ade80" : "#f87171";
         string resultLabel = isWin ? "VICTORY" : "DEFEAT";
-        string totalColor = totalRoundPoints >= 0 ? "#4ade80" : "#f87171";
+        string totalColor = totalRoundPoints >= 0 ? "#ffffff" : "#ffffff";
         string totalSign = totalRoundPoints >= 0 ? "+" : "";
-        var details = GetRankHudDetails(data, rankInfo);
-        string nextRankText = rankInfo.nextRankPoints >= 99999
-            ? "Top rank reached"
-            : details.pointsToNextRank + " MMR to next rank";
 
         string html = "<html><body style='margin:0;padding:0;'><div style='text-align:center;font-family:Arial;'>";
-        html += "<div style='font-size:32px;font-weight:bold;color:" + resultColor + ";text-shadow:0 0 18px " + resultColor + ";'>" + resultLabel + "</div>";
-        html += "<div style='font-size:24px;font-weight:bold;color:" + totalColor + ";margin-top:4px;'>" + totalSign + totalRoundPoints + " MMR</div>";
-        html += "<div style='font-size:15px;color:#cfcfcf;margin-top:8px;'>" + details.prestigeTag + "<span style='color:" + details.rankColor + ";font-weight:bold;'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
-        html += "<div style='margin-top:8px;width:260px;height:10px;background:#333;border-radius:5px;margin-left:auto;margin-right:auto;'><div style='width:" + details.progressPercent + "%;height:10px;background:" + details.rankColor + ";border-radius:5px;'></div></div>";
-        html += "<div style='font-size:12px;color:#999;margin-top:4px;'>" + details.progressPercent + "% to next rank</div>";
-        html += "<div style='font-size:12px;color:#777;margin-top:2px;'>" + nextRankText + "</div>";
+        html += "<div style='font-size:28px;font-weight:bold;color:" + resultColor + ";text-shadow:0 0 14px " + resultColor + ";'>" + resultLabel + "</div>";
+        html += "<div style='font-size:20px;font-weight:bold;color:" + totalColor + ";margin-top:4px;'>" + totalSign + totalRoundPoints + " MMR</div>";
         html += "</div></body></html>";
-        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Critical, Config.RoundEndHudDurationSeconds);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.High, Config.RoundEndHudDurationSeconds);
     }
 
     [ConsoleCommand("css_top", "Shows Top 10 Leaderboard")]
@@ -854,7 +846,7 @@ public class shaedyRanksPlugin : BasePlugin
                && player.IsValid
                && !player.IsBot
                && !player.IsHLTV
-               && player.Connected == PlayerConnectedState.PlayerConnected;
+               && IsConnectedState(player.Connected);
     }
 
     private void OnMapStart(string mapName)
@@ -868,5 +860,11 @@ public class shaedyRanksPlugin : BasePlugin
             return;
 
         Console.WriteLine("[shaedyRanks] " + message);
+    }
+
+    private static bool IsConnectedState(PlayerConnectedState state)
+    {
+        var stateName = state.ToString();
+        return stateName == "Connected" || stateName == "PlayerConnected";
     }
 }
