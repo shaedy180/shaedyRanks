@@ -87,8 +87,11 @@ public class DamageTracker
 public class shaedyRanksPlugin : BasePlugin
 {
     public override string ModuleName => "shaedy Ranks";
-    public override string ModuleVersion => "5.2";
+    public override string ModuleVersion => "5.3";
     public override string ModuleAuthor => "shaedy";
+
+    private const int RoundEndSummaryDurationSeconds = 3;
+    private const int RoundEndRankDurationSeconds = 6;
 
     public shaedyRanksConfig Config { get; set; } = new();
 
@@ -181,10 +184,8 @@ public class shaedyRanksPlugin : BasePlugin
         HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 2);
     }
 
-    private void ShowRankProgressBar(CCSPlayerController player)
+    private string BuildRankProgressBarHtml(CCSPlayerController player)
     {
-        if (!Config.EnableHudFeatures) return;
-
         var data = GetPlayerData(player);
         var rankInfo = GetRankInfo(data.Points);
         int prevThreshold = 0;
@@ -206,7 +207,14 @@ public class shaedyRanksPlugin : BasePlugin
         html += "<div style='margin-top:4px;width:250px;height:8px;background:#333;border-radius:4px;margin-left:auto;margin-right:auto;'><div style='width:" + pct + "%;height:8px;background:" + rankColor + ";border-radius:4px;'></div></div>";
         html += "<div style='font-size:12px;color:#888;margin-top:2px;'>" + pct + "% to next rank</div>";
         html += "</div></body></html>";
-        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 3);
+        return html;
+    }
+
+    private void ShowRankProgressBar(CCSPlayerController player)
+    {
+        if (!Config.EnableHudFeatures) return;
+
+        HudManagerProxy.Show(player.SteamID, BuildRankProgressBarHtml(player), HudManagerProxy.Priority.Medium, 3);
     }
 
     private void ShowKillStreakIndicator(CCSPlayerController player, int streak)
@@ -571,15 +579,7 @@ public class shaedyRanksPlugin : BasePlugin
             player.PrintToChat(" " + ChatColors.DarkRed + "--------------------------------------------------");
 
             if (Config.EnableHudFeatures)
-            {
-                ShowRoundEndHudPanel(player, isWin, winPoints, statsPoints, rankInfo, data);
-
-                AddTimer(3.5f, () =>
-                {
-                    if (player.IsValid && !player.IsBot)
-                        ShowRankProgressBar(player);
-                });
-            }
+                QueueRoundEndHudPanels(player, isWin, statsPoints, rankInfo, data);
         }
 
         SaveData(async: true);
@@ -587,7 +587,7 @@ public class shaedyRanksPlugin : BasePlugin
         return HookResult.Continue;
     }
 
-    private void ShowRoundEndHudPanel(CCSPlayerController player, bool isWin, int winPoints, int totalRoundPoints, (string rankName, int nextRankPoints) rankInfo, PlayerData data)
+    private void ShowRoundEndHudPanel(CCSPlayerController player, bool isWin, int totalRoundPoints, (string rankName, int nextRankPoints) rankInfo, PlayerData data)
     {
         string resultColor = isWin ? "#4ade80" : "#f87171";
         string resultSymbol = isWin ? "+" : "X";
@@ -602,7 +602,15 @@ public class shaedyRanksPlugin : BasePlugin
         html += "<div style='font-size:18px;color:#ccc;margin-top:4px;'>Round: <span style='color:" + totalColor + ";font-weight:bold;'>" + totalSign + totalRoundPoints + "</span> MMR</div>";
         html += "<div style='font-size:14px;color:#888;margin-top:6px;'>" + prestigeTag + " <span style='color:" + rankColor + ";'>" + rankInfo.rankName + "</span> | " + data.Points + " MMR</div>";
         html += "</div></body></html>";
-        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.Medium, 3);
+        HudManagerProxy.Show(player.SteamID, html, HudManagerProxy.Priority.High, RoundEndSummaryDurationSeconds);
+    }
+
+    private void QueueRoundEndHudPanels(CCSPlayerController player, bool isWin, int totalRoundPoints, (string rankName, int nextRankPoints) rankInfo, PlayerData data)
+    {
+        // Queue the follow-up panel underneath the round-end summary so the player
+        // always gets a stable VICTORY/DEFEAT screen before the rank/MMR panel takes over.
+        HudManagerProxy.Show(player.SteamID, BuildRankProgressBarHtml(player), HudManagerProxy.Priority.Medium, RoundEndRankDurationSeconds);
+        ShowRoundEndHudPanel(player, isWin, totalRoundPoints, rankInfo, data);
     }
 
     [ConsoleCommand("css_top", "Shows Top 10 Leaderboard")]
